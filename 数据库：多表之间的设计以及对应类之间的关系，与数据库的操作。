@@ -1,0 +1,365 @@
+本文来自于 https://blog.csdn.net/btt2013/article/details/49948403
+
+当我们所做的项目要和数据库打交道的时候，总会要在数据库中创建表。
+
+而表之间的关系：一对多，多对多，一对一，我们必须遵循数据完整性中的参照完整性。
+
+简单提及一下，数据完整性有：实体完整性，域完整性，参照完整性。
+
+create database dbtest;
+use dbtest;
+--客户和订单：一对多
+create table customers(
+	`id` int primary key,
+	`name` varchar(100),
+	`address` varchar(100)
+);
+create table `orders`(
+	`id` int primary key,
+	`num` int,
+	amount float(8,2),
+	customer_id int,
+	constraint customer_id_fk foreign key(customer_id) references customers(id)
+);
+--教师和老师：多对多
+create table teachers(
+	id int primary key,
+	name varchar(100),
+	salary float(8,2)
+);
+create table students(
+	id int,
+	name varchar(100),
+	grade varchar(10),
+	primary key(id)
+);
+create table teachers_students(
+	t_id int,
+	s_id int,
+	primary key(t_id,s_id),
+	constraint t_id_fk foreign key(t_id) references teachers(id),
+	constraint s_id_fk foreign key(s_id) references students(id)
+);
+--人和身份证：一对一
+create table persons(
+	id int primary key,
+	name varchar(100)
+);
+create table idcards(
+	id int primary key,
+	num varchar(20),
+	constraint person_id_fk foreign key(id) references persons(id)
+);
+
+表与表之间的关联关系：
+一对多：
+客户与订单之间的关系：一个客户可以有多个订单，但是一个订单只能属于一个客户。
+
+
+CustomerDaoImpl.java
+package com.xbmu.dao.impl;
+ 
+import java.sql.SQLException;
+import java.util.List;
+import org.apache.commons.dbutils.QueryRunner;
+import org.apache.commons.dbutils.handlers.BeanHandler;
+import org.apache.commons.dbutils.handlers.BeanListHandler;
+import com.xbmu.domain.Customer;
+import com.xbmu.domain.Order;
+import com.xbmu.util.DBCPUtil;
+public class CustomerDaoImpl {
+	private QueryRunner qr = new QueryRunner(DBCPUtil.getDataSource());
+	/**保存客户信息*/
+	public void save(Customer c){
+		try {
+			//保存客户的基本信息到customers表
+			qr.update("insert into customers (id,name,address) values(?,?,?)", c.getId(),c.getName(),c.getAddress());
+			//判断客户有没有订单：如果有，保存到orders表中
+			List<Order> os = c.getOrders();
+			if(os.size()>0){
+				for(Order o:os)
+					qr.update("insert into orders (id,num,amount,customer_id) values(?,?,?,?)", o.getId(),
+							o.getNum(),o.getAmount(),
+							c.getId());
+			}
+		} catch (SQLException e) {
+			throw new RuntimeException(e);
+		}
+		
+	}
+	/**查询客户信息。客户关联的订单要不要查出来？看需求。*/
+	public Customer findOne(int customerId){
+		try {
+			//查询客户信息
+			Customer c = qr.query("select * from customers where id=?", new BeanHandler<Customer>(Customer.class),customerId);
+			//同时查询客户的订单信息
+			if(c!=null){
+				List<Order> os = qr.query("select * from orders where customer_id=?", new BeanListHandler<Order>(Order.class), c.getId());
+				c.setOrders(os);
+			}
+			return c;
+		} catch (SQLException e) {
+			throw new RuntimeException(e);
+		}
+	}
+}
+CustomerDaoImplTest.java
+package cn.itcast.test;
+ 
+import java.util.List;
+import org.junit.Test;
+import cn.itcast.dao.impl.CustomerDaoImpl;
+import cn.itcast.domain.Customer;
+import cn.itcast.domain.Order;
+public class CustomerDaoImplTest {
+	private CustomerDaoImpl dao = new CustomerDaoImpl();
+	@Test
+	public void testSave() {
+		Customer c = new Customer();
+		c.setId(1);
+		c.setName("陈冲");
+		c.setAddress("河南");
+		
+		Order o1 = new Order();
+		o1.setId(1);
+		o1.setNum(2014001);
+		o1.setAmount(100);
+		
+		Order o2 = new Order();
+		o2.setId(2);
+		o2.setNum(2014002);
+		o2.setAmount(1000);
+		
+		//建立关系
+		c.getOrders().add(o1);
+		c.getOrders().add(o2);
+		
+		dao.save(c);
+	}
+ 
+	@Test
+	public void testFindOne() {
+		Customer c = dao.findOne(1);
+		System.out.println(c);
+		List<Order> os = c.getOrders();
+		for(Order o:os)
+			System.out.println(o);
+	}
+ 
+}
+多对多：
+教师与学生的关系：一个教师可以有多个学生，一个学生可以有多个老师。因此教师与学生是多对多关系
+
+TeacherDaoImpl.java
+package com.xbmu.dao.impl;
+ 
+import java.sql.SQLException;
+import java.util.List;
+import org.apache.commons.dbutils.QueryRunner;
+import org.apache.commons.dbutils.handlers.BeanHandler;
+import org.apache.commons.dbutils.handlers.BeanListHandler;
+import com.xbmu.domain.Student;
+import com.xbmu.domain.Teacher;
+import com.xbmu.util.DBCPUtil;
+public class TeacherDaoImpl {
+	private QueryRunner qr = new QueryRunner(DBCPUtil.getDataSource());
+	public void save(Teacher t){
+		try {
+			//保存老师的基本信息
+			qr.update("insert into teachers(id,name,salary) values (?,?,?)", t.getId(),t.getName(),t.getSalary());
+			//保存学员信息：
+			List<Student> students = t.getStudents();
+			if(students.size()>0){
+				for(Student s:students){
+					//查询学员在不在：不在，保存学员信息
+					Student stu = qr.query("select * from students where id=?", new BeanHandler<Student>(Student.class), s.getId());
+					if(stu==null){
+						qr.update("insert into students (id,name,grade) values(?,?,?)", s.getId(),s.getName(),s.getGrade());
+					}
+					//保存关系数据
+					qr.update("insert into teachers_students (t_id,s_id) values(?,?)", t.getId(),s.getId());
+				}
+			}
+		} catch (SQLException e) {
+			throw new RuntimeException(e);
+		}
+			
+	}
+	public Teacher findOne(int id){
+		try {
+			Teacher t = qr.query("select * from teachers where id=?", new BeanHandler<Teacher>(Teacher.class), id);
+			if(t!=null){
+				//查询学生信息
+				String sql = "select s.* from students s,teachers_students ts where s.id=ts.s_id and ts.t_id=?";
+				List<Student> stus = qr.query(sql, new BeanListHandler<Student>(Student.class), id);
+				t.setStudents(stus);
+			}
+			return t;
+		} catch (SQLException e) {
+			throw new RuntimeException(e);
+		}
+	}
+}
+TeacherDaoImplTest.java
+package cn.itcast.test;
+ 
+import org.junit.Test;
+ 
+import cn.itcast.dao.impl.TeacherDaoImpl;
+import cn.itcast.domain.Student;
+import cn.itcast.domain.Teacher;
+ 
+public class TeacherDaoImplTest {
+	private TeacherDaoImpl dao = new TeacherDaoImpl();
+	@Test
+	public void testSave(){
+		
+		Teacher t1 = new Teacher();
+		t1.setId(1);
+		t1.setName("陈文");
+		t1.setSalary(10000);
+		
+		Teacher t2 = new Teacher();
+		t2.setId(2);
+		t2.setName("刘悦东");
+		t2.setSalary(10000);
+		
+		Student s1 = new Student();
+		s1.setId(1);
+		s1.setName("张三");
+		s1.setGrade("A");
+		
+		Student s2 = new Student();
+		s2.setId(2);
+		s2.setName("李四");
+		s2.setGrade("A");
+		
+		//建立关系
+		t1.getStudents().add(s1);
+		t1.getStudents().add(s2);
+		
+		t2.getStudents().add(s1);
+		t2.getStudents().add(s2);
+		
+		dao.save(t1);
+		dao.save(t2);
+	}
+	@Test
+	public void testQuery(){
+		Teacher t = dao.findOne(2);
+		System.out.println(t);
+		for(Student s:t.getStudents())
+			System.out.println(s);
+	}
+}
+一对一：
+人与身份证：一个人只能有一个身份证，一个身份证只能属于一个人。
+
+PersonDaoImpl.java
+package com.xbmu.dao.impl;
+ 
+import java.sql.SQLException;
+import org.apache.commons.dbutils.QueryRunner;
+import org.apache.commons.dbutils.handlers.BeanHandler;
+import com.xbmu.domain.IdCard;
+import com.xbmu.domain.Person;
+import com.xbmu.util.DBCPUtil;
+public class PersonDaoImpl {
+	private QueryRunner qr = new QueryRunner(DBCPUtil.getDataSource());
+	public void save(Person p) {
+		try {
+			qr.update("insert into persons (id,name) values(?,?)", p.getId(),p.getName());
+			IdCard idcard = p.getIdcard();
+			if(idcard!=null){
+				qr.update("insert into idcards (id,num) values(?,?)", p.getId(),idcard.getNum());
+			}
+		} catch (SQLException e) {
+			throw new RuntimeException(e);
+		}
+	}
+ 
+	public Person findOne(int id) {
+		try {
+			Person p = qr.query("select * from persons where id=?", new BeanHandler<Person>(Person.class), id);
+			if(p!=null){
+				IdCard idcard = qr.query("select * from idcards where id=?", new BeanHandler<IdCard>(IdCard.class), id);
+				p.setIdcard(idcard);
+			}
+			return p;
+		} catch (SQLException e) {
+			throw new RuntimeException(e);
+		}
+	}
+}
+
+连接数据库需要的工具类：
+DBCPUtil.java
+package com.xbmu.util;
+ 
+import java.io.InputStream;
+import java.sql.Connection;
+import java.sql.SQLException;
+import java.util.Properties;
+ 
+import javax.sql.DataSource;
+ 
+import org.apache.commons.dbcp.BasicDataSourceFactory;
+ 
+public class DBCPUtil {
+	private static DataSource dataSource;
+	
+	static{
+		try {
+			Properties props = new Properties();
+			InputStream in = DBCPUtil.class.getClassLoader().getResourceAsStream("dbcpconfig.properties");
+			props.load(in);
+			dataSource = BasicDataSourceFactory.createDataSource(props);
+		} catch (Exception e) {
+			e.printStackTrace();
+		}
+	}
+	
+	public static DataSource getDataSource(){
+		return dataSource;
+	}
+	public static Connection getConnection(){
+		try {
+			Connection conn = dataSource.getConnection();
+			return conn;
+		} catch (SQLException e) {
+			throw new RuntimeException(e);
+		}
+	}
+}
+PersonDaoImplTest.java
+package cn.itcast.test;
+ 
+import org.junit.Test;
+import cn.itcast.dao.impl.PersonDaoImpl;
+import cn.itcast.domain.IdCard;
+import cn.itcast.domain.Person;
+public class PersonDaoImplTest {
+	private PersonDaoImpl dao = new PersonDaoImpl();
+	@Test
+	public void testSave() {
+		Person p = new Person();
+		p.setId(1);
+		p.setName("陈冲");
+		
+		IdCard idcard = new IdCard();
+		idcard.setNum("4201");
+		
+		p.setIdcard(idcard);
+		
+		dao.save(p);
+	}
+ 
+	@Test
+	public void testFindOne() {
+		Person p = dao.findOne(1);
+		System.out.println(p.getName());
+		System.out.println(p.getIdcard().getNum());
+	}
+ 
+}
+
